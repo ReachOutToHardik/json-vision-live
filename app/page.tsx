@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import html2canvas from 'html2canvas';
 import { 
   Copy, 
   Trash2, 
@@ -146,14 +147,29 @@ interface GraphNodeProps {
   node: GraphNode;
   onCopyPath: (path: string) => void;
   onMouseDown: (e: React.MouseEvent, nodeId: string) => void;
+  searchTerm?: string;
 }
 
-const GraphNodeComponent: React.FC<GraphNodeProps> = ({ node, onCopyPath, onMouseDown }) => {
+const GraphNodeComponent: React.FC<GraphNodeProps> = ({ node, onCopyPath, onMouseDown, searchTerm = '' }) => {
   const isArray = node.type === 'array';
+  
+  const matchesSearch = searchTerm.trim() !== '' && (
+    node.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    node.path.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    Object.entries(node.data).some(([k, v]) => 
+      k.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      String(v).toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  );
   
   return (
     <div 
-      className="absolute bg-slate-900 border border-slate-700 rounded-lg shadow-xl overflow-hidden hover:border-blue-500/50 transition-colors w-80 group cursor-grab active:cursor-grabbing z-10"
+      className={`absolute bg-slate-900 border rounded-lg shadow-xl overflow-hidden transition-all w-80 group cursor-grab active:cursor-grabbing z-10
+        ${matchesSearch 
+          ? 'border-yellow-500 shadow-[0_0_20px_rgba(234,179,8,0.4)] ring-2 ring-yellow-500/30 scale-[1.02]' 
+          : 'border-slate-700 hover:border-blue-500/50'
+        }
+      `}
       style={{ 
         left: node.x, 
         top: node.y,
@@ -189,14 +205,18 @@ const GraphNodeComponent: React.FC<GraphNodeProps> = ({ node, onCopyPath, onMous
         {Object.keys(node.data).length === 0 ? (
           <div className="text-slate-600 text-sm italic px-1">Contains objects...</div>
         ) : (
-          Object.entries(node.data).map(([k, v]) => (
-            <div key={k} className="flex items-start text-sm font-mono border-b border-slate-800/50 last:border-0 pb-1.5 mb-1.5 last:pb-0 last:mb-0">
-              <span className="text-slate-400 mr-2 shrink-0">{k}:</span>
-              <span className="text-emerald-400 break-all truncate line-clamp-2">
-                {v === null ? 'null' : v.toString()}
-              </span>
-            </div>
-          ))
+          Object.entries(node.data).map(([k, v]) => {
+            const isKeyMatch = searchTerm.trim() !== '' && k.toLowerCase().includes(searchTerm.toLowerCase());
+            const isValMatch = searchTerm.trim() !== '' && String(v).toLowerCase().includes(searchTerm.toLowerCase());
+            return (
+              <div key={k} className="flex items-start text-sm font-mono border-b border-slate-800/50 last:border-0 pb-1.5 mb-1.5 last:pb-0 last:mb-0">
+                <span className={`mr-2 shrink-0 ${isKeyMatch ? 'text-yellow-400 font-bold bg-yellow-400/10 px-0.5 rounded' : 'text-slate-400'}`}>{k}:</span>
+                <span className={`break-all truncate line-clamp-2 ${isValMatch ? 'text-yellow-400 font-bold bg-yellow-400/10 px-0.5 rounded' : 'text-emerald-400'}`}>
+                  {v === null ? 'null' : v.toString()}
+                </span>
+              </div>
+            );
+          })
         )}
       </div>
     </div>
@@ -428,6 +448,56 @@ export default function JsonVisualizer() {
     ]
   };
 
+  const presets = {
+    "Micro-SaaS Project": defaultJson,
+    "Simple Profile": {
+      "name": "Hardik Joshi",
+      "role": "Full Stack Developer",
+      "location": "India",
+      "portfolio": "https://github.com/ReachOutToHardik",
+      "skills": ["TypeScript", "Next.js", "React", "Tailwind CSS", "Node.js"]
+    },
+    "E-Commerce Product": {
+      "productId": "prod_721890",
+      "title": "Ultra-Wide Gaming Monitor 34\"",
+      "price": 499.99,
+      "brand": "VisionEdge",
+      "availability": {
+        "status": "In Stock",
+        "quantity": 14
+      },
+      "specs": {
+        "resolution": "3440 x 1440",
+        "panelType": "IPS",
+        "refreshRate": "144Hz",
+        "hdrSupported": true
+      },
+      "tags": ["gaming", "hardware", "monitor"]
+    },
+    "Social Media Feed": {
+      "feedOwner": "johndoe_dev",
+      "stats": {
+        "postsCount": 142,
+        "followers": 18400
+      },
+      "posts": [
+        {
+          "id": "post_a12",
+          "likes": 1204,
+          "comments": [
+            { "user": "alice", "text": "This JSON visualization tool is incredible!" },
+            { "user": "bob", "text": "Wow, the graph view makes layout easy." }
+          ]
+        },
+        {
+          "id": "post_b34",
+          "likes": 562,
+          "comments": []
+        }
+      ]
+    }
+  };
+
   const [input, setInput] = useState(JSON.stringify(defaultJson, null, 2));
   const [parsedData, setParsedData] = useState<any>(defaultJson);
   const [error, setError] = useState<string | null>(null);
@@ -444,10 +514,18 @@ export default function JsonVisualizer() {
 
   // --- Movement State ---
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const itemStartRef = useRef({ x: 0, y: 0 });
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleLoadPreset = (key: keyof typeof presets) => {
+    setInput(JSON.stringify(presets[key], null, 2));
+    showNotification(`Loaded preset: ${key}`);
+  };
 
   useEffect(() => {
     try {
@@ -469,7 +547,50 @@ export default function JsonVisualizer() {
     } catch (err: any) {
       setError(err.message);
     }
-  }, [input]); // Dependencies technically include draggedNodeId but logic handles it
+  }, [input]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleNativeWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const containerRect = container.getBoundingClientRect();
+      const mouseX = e.clientX - containerRect.left;
+      const mouseY = e.clientY - containerRect.top;
+
+      if (e.ctrlKey) {
+        const zoomFactor = 1.05;
+        const delta = -e.deltaY;
+        const factor = delta > 0 ? zoomFactor : 1 / zoomFactor;
+        
+        setZoom(prev => {
+          const newZoom = Math.min(Math.max(prev * factor, 0.25), 3.0);
+          
+          setPan(prevPan => {
+            const xs = (mouseX - prevPan.x) / prev;
+            const ys = (mouseY - prevPan.y) / prev;
+            return {
+              x: mouseX - xs * newZoom,
+              y: mouseY - ys * newZoom
+            };
+          });
+          
+          return newZoom;
+        });
+      } else {
+        setPan(prev => ({
+          x: prev.x - e.deltaX,
+          y: prev.y - e.deltaY
+        }));
+      }
+    };
+
+    container.addEventListener('wheel', handleNativeWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleNativeWheel);
+    };
+  }, [zoom]);
 
   // --- Drag Handlers ---
 
@@ -498,8 +619,8 @@ export default function JsonVisualizer() {
       const dy = e.clientY - dragStartRef.current.y;
       setPan({ x: itemStartRef.current.x + dx, y: itemStartRef.current.y + dy });
     } else if (draggedNodeId) {
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
+      const dx = (e.clientX - dragStartRef.current.x) / zoom;
+      const dy = (e.clientY - dragStartRef.current.y) / zoom;
       
       setGraphData(prev => ({
         ...prev,
@@ -557,6 +678,52 @@ export default function JsonVisualizer() {
   const handleClear = () => {
     setInput('');
     setParsedData(null);
+  };
+
+  const handleZoomIn = () => {
+    setZoom(prev => Math.min(prev + 0.15, 2.5));
+  };
+
+  const handleZoomOut = () => {
+    setZoom(prev => Math.max(prev - 0.15, 0.4));
+  };
+
+  const handleZoomReset = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const handleResetLayout = () => {
+    if (parsedData) {
+      const { nodes, edges } = processGraph(parsedData);
+      setGraphData({ nodes, edges });
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      showNotification("Layout & zoom reset successfully!");
+    }
+  };
+
+  const handleExportPng = async () => {
+    if (!canvasRef.current) return;
+    try {
+      showNotification("Generating high-res PNG...");
+      const element = canvasRef.current;
+      const canvas = await html2canvas(element, {
+        backgroundColor: '#020617',
+        logging: false,
+        useCORS: true,
+        scale: 2,
+      });
+      
+      const link = document.createElement('a');
+      link.download = `json-vision-graph-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      showNotification("Graph exported successfully!");
+    } catch (err) {
+      console.error(err);
+      showNotification("Failed to export graph image", true);
+    }
   };
 
   const handleCopyInput = () => {
@@ -674,9 +841,9 @@ export default function JsonVisualizer() {
           </div>
         </div>
 
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-2 sm:space-x-4">
           {/* File Upload Controls */}
-          <div className="hidden md:flex items-center space-x-2">
+          <div className="flex items-center space-x-2">
             <input 
               ref={fileInputRef}
               type="file" 
@@ -686,50 +853,50 @@ export default function JsonVisualizer() {
             />
             <button 
               onClick={handleBrowseFile}
-              className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-md text-sm border border-slate-700 transition-colors"
+              className="flex items-center justify-center p-2 sm:px-3 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-md text-sm border border-slate-700 transition-colors"
               title="Browse Files"
             >
               <Folder size={14} />
-              <span className="hidden lg:inline">Browse</span>
+              <span className="hidden md:inline ml-2">Browse</span>
             </button>
           </div>
 
           {/* View Toggles */}
-          <div className="hidden md:flex bg-slate-800 rounded-lg p-1 border border-slate-700">
+          <div className="flex bg-slate-800 rounded-lg p-1 border border-slate-700">
             <button 
               onClick={() => setViewMode('editor')}
-              className={`px-3 py-1 text-xs rounded-md transition-all ${viewMode === 'editor' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+              className={`px-2 sm:px-3 py-1 text-[10px] sm:text-xs rounded-md transition-all ${viewMode === 'editor' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
             >
               Raw
             </button>
             <button 
               onClick={() => setViewMode('split')}
-              className={`px-3 py-1 text-xs rounded-md transition-all ${viewMode === 'split' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+              className={`hidden sm:inline-block px-2 sm:px-3 py-1 text-[10px] sm:text-xs rounded-md transition-all ${viewMode === 'split' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
             >
               Split
             </button>
             <button 
               onClick={() => setViewMode('visual')}
-              className={`px-3 py-1 text-xs rounded-md transition-all ${viewMode === 'visual' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+              className={`px-2 sm:px-3 py-1 text-[10px] sm:text-xs rounded-md transition-all ${viewMode === 'visual' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
             >
               Tree
             </button>
             <button 
               onClick={() => setViewMode('graph')}
-              className={`px-3 py-1 text-xs rounded-md transition-all flex items-center space-x-1 ${viewMode === 'graph' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
+              className={`px-2 sm:px-3 py-1 text-[10px] sm:text-xs rounded-md transition-all flex items-center space-x-1 ${viewMode === 'graph' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-white'}`}
             >
-              <Share2 size={10} className="mr-1" />
-              Graph
+              <Share2 size={10} className="mr-0.5" />
+              <span>Graph</span>
             </button>
           </div>
 
           <button 
             onClick={handleDownload}
-            className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-4 py-1.5 rounded-md text-sm border border-blue-500/50 transition-all shadow-lg shadow-blue-500/20"
+            className="flex items-center justify-center p-2 sm:px-4 sm:py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white rounded-md text-sm border border-blue-500/50 transition-all shadow-lg shadow-blue-500/20"
             title="Export JSON"
           >
             <Download size={14} />
-            <span className="hidden sm:inline">Export JSON</span>
+            <span className="hidden sm:inline ml-2">Export</span>
           </button>
         </div>
       </header>
@@ -770,8 +937,20 @@ export default function JsonVisualizer() {
             )}
           </div>
 
-          <div className="bg-slate-900/50 p-2 border-b border-slate-800 flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-2">Input</span>
+          <div className="bg-slate-900/50 p-2 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center space-x-3">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-2">Input</span>
+              <select 
+                onChange={(e) => e.target.value && handleLoadPreset(e.target.value as any)}
+                defaultValue=""
+                className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 focus:outline-none focus:border-blue-500 cursor-pointer"
+              >
+                <option value="" disabled>Load Preset...</option>
+                {Object.keys(presets).map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
             <div className="flex space-x-1">
               <button onClick={handleFormat} title="Format" className="p-1.5 hover:bg-slate-700 rounded text-slate-400 hover:text-blue-400 transition-colors">
                 <Play size={16} className="rotate-90" />
@@ -825,29 +1004,31 @@ export default function JsonVisualizer() {
         `}>
           
           {/* Toolbar */}
-          <div className="bg-slate-900/50 p-2 border-b border-slate-800 flex items-center justify-between z-10">
+          <div className="bg-slate-900/50 p-2 border-b border-slate-800 flex items-center justify-between z-10 flex-wrap gap-2">
              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider ml-2">
                {viewMode === 'graph' ? 'Graph Flow' : 'Tree View'}
              </span>
-             {viewMode !== 'graph' && (
+             
+             <div className="flex items-center space-x-3">
+               {viewMode === 'graph' && (
+                 <div className="text-[11px] text-slate-500 hidden sm:flex items-center space-x-2 mr-2">
+                    <span className="opacity-50">Pan: Drag Canvas • Move: Drag Node</span>
+                    <span className="w-px h-3 bg-slate-800"></span>
+                    <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-blue-500 mr-1"></span>Object</span>
+                    <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-purple-500 mr-1"></span>Array</span>
+                 </div>
+               )}
                <div className="relative group">
-                  <Search className="absolute left-2 top-1.5 text-slate-500 group-focus-within:text-blue-400" size={14} />
+                  <Search className="absolute left-2.5 top-1.5 text-slate-500 group-focus-within:text-blue-400" size={12} />
                   <input 
                     type="text" 
-                    placeholder="Filter nodes..." 
+                    placeholder="Search nodes..." 
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="bg-slate-950 border border-slate-700 rounded-md pl-8 pr-2 py-1 text-xs w-32 focus:w-48 transition-all focus:outline-none focus:border-blue-500 text-slate-200 placeholder-slate-600"
+                    className="bg-slate-950 border border-slate-700 rounded-md pl-8 pr-2 py-1 text-xs w-32 sm:w-48 transition-all focus:outline-none focus:border-blue-500 text-slate-200 placeholder-slate-600"
                   />
                </div>
-             )}
-             {viewMode === 'graph' && (
-               <div className="text-xs text-slate-500 flex items-center space-x-2">
-                  <span className="hidden lg:inline opacity-50 mr-2">Drag background to pan • Drag nodes to move</span>
-                  <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-blue-500 mr-1"></span>Object</span>
-                  <span className="flex items-center"><span className="w-2 h-2 rounded-full bg-purple-500 mr-1"></span>Array</span>
-               </div>
-             )}
+             </div>
           </div>
 
           {/* Viewer Content */}
@@ -860,25 +1041,72 @@ export default function JsonVisualizer() {
             ) : viewMode === 'graph' ? (
               // --- GRAPH VIEW (Interactive) ---
               <div 
-                className={`w-full h-full relative overflow-hidden ${isDraggingCanvas ? 'cursor-grabbing' : 'cursor-grab'}`}
+                ref={(el) => {
+                  (canvasRef as any).current = el;
+                  (containerRef as any).current = el;
+                }}
+                className={`w-full h-full relative overflow-hidden graph-grid ${isDraggingCanvas ? 'cursor-grabbing' : 'cursor-grab'}`}
                 onMouseDown={(e) => handleMouseDown(e, null)}
               >
                 {/* Watermark */}
-                <div className="absolute bottom-6 right-6 z-50 pointer-events-none select-none">
+                <div className="absolute bottom-6 right-6 z-35 pointer-events-none select-none">
                   <div className="flex items-center space-x-2 bg-slate-900/80 backdrop-blur-sm px-4 py-2 rounded-lg border border-slate-700/50 shadow-xl">
                     <div className="bg-gradient-to-br from-blue-600 to-purple-600 p-1.5 rounded">
                       <Braces className="text-white" size={16} />
                     </div>
                     <div className="text-sm">
                       <div className="font-bold text-white">JSON Vision</div>
-                      <div className="text-[10px] text-slate-400">jsonvision.dev</div>
+                      <div className="text-[10px] text-slate-400">jsonvision.vercel.app</div>
                     </div>
                   </div>
+                </div>
+
+                {/* Floating Canvas Controls */}
+                <div className="absolute bottom-6 left-6 z-35 flex items-center space-x-1.5 bg-slate-900/90 backdrop-blur-md px-3 py-2 rounded-lg border border-slate-800 shadow-2xl">
+                  <button 
+                    onClick={handleZoomIn} 
+                    className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                    title="Zoom In"
+                  >
+                    <Search size={14} className="text-blue-400" />
+                  </button>
+                  <button 
+                    onClick={handleZoomOut} 
+                    className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                    title="Zoom Out"
+                  >
+                    <Search size={14} className="text-purple-400" />
+                  </button>
+                  <button 
+                    onClick={handleZoomReset} 
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-750 rounded text-xs font-mono text-slate-300 hover:text-white transition-colors"
+                    title="Reset Zoom & Pan"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button 
+                    onClick={handleResetLayout} 
+                    className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                    title="Reset Layout & Recalculate Node Positions"
+                  >
+                    <Zap size={14} className="text-yellow-400" />
+                  </button>
+                  <span className="w-px h-4 bg-slate-800"></span>
+                  <button 
+                    onClick={handleExportPng} 
+                    className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-emerald-400 transition-colors"
+                    title="Export Graph as PNG"
+                  >
+                    <Download size={14} className="text-emerald-400" />
+                  </button>
                 </div>
                 
                 {/* Transform Layer */}
                 <div 
-                  style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}
+                  style={{ 
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                    transformOrigin: '0 0'
+                  }}
                   className="w-full h-full absolute top-0 left-0 transition-transform duration-75 ease-out will-change-transform"
                 >
                   {/* Render SVG Edges Layer */}
@@ -907,6 +1135,7 @@ export default function JsonVisualizer() {
                       node={node} 
                       onCopyPath={handleCopyPath} 
                       onMouseDown={handleMouseDown}
+                      searchTerm={searchTerm}
                     />
                   ))}
                 </div>
@@ -1060,9 +1289,6 @@ export default function JsonVisualizer() {
                 <div className="flex space-x-3">
                   <a href="https://github.com/ReachOutToHardik" target='_blank' className="bg-slate-800 hover:bg-blue-600 p-2 rounded-lg transition-colors group" title="GitHub">
                     <Github size={18} className="text-slate-400 group-hover:text-white" />
-                  </a>
-                  <a href="https://instagram.com/hardik_joshi14" target='_blank' className="bg-slate-800 hover:bg-blue-500 p-2 rounded-lg transition-colors group" title="Twitter">
-                    <Instagram size={18} className="text-slate-400 group-hover:text-white" />
                   </a>
                   <a href="https://linkedin.com/in/reachouttohardik" target='_blank' className="bg-slate-800 hover:bg-purple-600 p-2 rounded-lg transition-colors group" title="Website">
                     <Linkedin size={18} className="text-slate-400 group-hover:text-white" />
